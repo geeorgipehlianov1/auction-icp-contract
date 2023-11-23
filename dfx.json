@@ -1,0 +1,12 @@
+{
+  "canisters": {
+    "auctions": {
+      "type": "custom",
+      "build": "npx azle auctions",
+      "root": "src",
+      "ts": "src/index.ts",
+      "candid": "src/index.did",
+      "wasm": ".azle/auctions/auctions.wasm.gz"
+    }
+  }
+}
