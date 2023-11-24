@@ -1,0 +1,28 @@
+type Auction = record {
+  id : text;
+  status : text;
+  endDate : nat64;
+  ownerName : text;
+  ownerId : text;
+  assetDescription : text;
+  assetType : text;
+  startDate : nat64;
+};
+type AuctionPayload = record {
+  status : text;
+  ownerName : text;
+  assetDescription : text;
+  assetType : text;
+};
+type _AzleResult = variant { Ok : Auction; Err : text };
+type _AzleResult_1 = variant { Ok : vec Auction; Err : text };
+service : () -> {
+  createAuction : (AuctionPayload) -> (_AzleResult);
+  deleteAuction : (text, text) -> (_AzleResult);
+  endAuction : (text, text) -> (_AzleResult);
+  getAllAuctions : () -> (_AzleResult_1) query;
+  getAuctionById : (text) -> (_AzleResult) query;
+  getAuctionsByStatus : (text) -> (_AzleResult_1) query;
+  getOwnersAuctions : (text) -> (_AzleResult_1) query;
+  updateAuction : (text, text, AuctionPayload) -> (_AzleResult);
+}
