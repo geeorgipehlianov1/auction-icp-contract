@@ -9,135 +9,255 @@ type Auction = Record<{
     ownerId: string;
     startDate: nat64;
     endDate: nat64;
-    status: string
-}>
+    status: string;
+}>;
 
 type AuctionPayload = Record<{
     assetType: string;
     assetDescription: string;
     ownerName: string;
-    status: string
-}>
-
+    status: string;
+}>;
 
 const fixedEndDate = 86400000;
 
 const auctionStorage = new StableBTreeMap<string, Auction>(1, 44, 1024);
 
+/**
+ * Retrieves all auctions from the system.
+ * @returns A Result containing a list of auctions or an error message.
+ */
 $query;
-export function getAllAuctions(): Result<Vec<Auction>, string>
-{
+export function getAllAuctions(): Result<Vec<Auction>, string> {
     try {
         return Result.Ok(auctionStorage.values());
     } catch (error) {
-        return Result.Err('Failed to get auctions')
+        return Result.Err('Failed to get auctions');
     }
 }
 
+/**
+ * Retrieves a specific auction by ID.
+ * @param auctionId - The ID of the auction to retrieve.
+ * @returns A Result containing the auction or an error message.
+ */
 $query;
 export function getAuctionById(auctionId: string): Result<Auction, string> {
+    // Validate ID
+    if (!isValidUUID(auctionId)) {
+        return Result.Err<Auction, string>('Invalid auction ID');
+    }
+
     return match(auctionStorage.get(auctionId), {
         Some: (auction) => Result.Ok<Auction, string>(auction),
-        None: () => Result.Err<Auction, string>(`Auction with the provided id: ${auctionId} has not been found!`)
-    })
+        None: () => Result.Err<Auction, string>(`Auction with the provided id: ${auctionId} has not been found!`),
+    });
 }
 
+/**
+ * Retrieves all auctions owned by a specific owner.
+ * @param ownerId - The ID of the owner.
+ * @returns A Result containing a list of auctions or an error message.
+ */
 $query;
 export function getOwnersAuctions(ownerId: string): Result<Vec<Auction>, string> {
+    // Validate ID
+    if (!isValidUUID(ownerId)) {
+        return Result.Err<Vec<Auction>, string>('Invalid owner ID');
+    }
+
     try {
-        return Result.Ok(auctionStorage.values().filter((auction) => auction.ownerId === ownerId));   
+        return Result.Ok(auctionStorage.values().filter((auction) => auction.ownerId === ownerId));
     } catch (error) {
-        return Result.Err(`Failed to retrieve your auctions!`)
+        return Result.Err(`Failed to retrieve auctions for owner with ID ${ownerId}!`);
     }
 }
 
+/**
+ * Retrieves auctions based on their status.
+ * @param status - The status to filter auctions.
+ * @returns A Result containing a list of auctions or an error message.
+ */
 $query;
 export function getAuctionsByStatus(status: string): Result<Vec<Auction>, string> {
     try {
+        // Validate status
         if (!isAuctionStatusValid(status)) {
-            return Result.Err(`Invalid auction status: ${status}`)
+            return Result.Err(`Invalid auction status: ${status}`);
         }
 
         const auctions: Vec<Auction> = auctionStorage.values().filter((auction) => {
             return auction.status == status;
         });
 
-        return Result.Ok(auctions);    
-    } catch (error) { 
-        return Result.Err('Failed to retrieve auction!')
+        return Result.Ok(auctions);
+    } catch (error) {
+        return Result.Err('Failed to retrieve auctions!');
     }
-  
 }
 
+/**
+ * Creates a new auction.
+ * @param payload - Information about the auction.
+ * @returns A Result containing the new auction or an error message.
+ */
 $update;
 export function createAuction(payload: AuctionPayload): Result<Auction, string> {
     try {
+        // Validate payload
         if (!payload.assetType || !payload.assetDescription || !payload.ownerName || !payload.status) {
             return Result.Err<Auction, string>('Incomplete input data!');
-        } 
+        }
 
-        const auction: Auction = { id: uuidv4(), startDate: ic.time(), ownerId: uuidv4(), endDate: ic.time() + BigInt(fixedEndDate), ...payload };
-        auctionStorage.insert(auction.id, auction);
-        return Result.Ok(auction);   
+        // Generate a unique ID for the auction
+        const auctionId = uuidv4();
+        // Set each property for better performance
+        const newAuction: Auction = {
+            id: auctionId,
+            assetType: payload.assetType,
+            assetDescription: payload.assetDescription,
+            ownerName: payload.ownerName,
+            ownerId: uuidv4(), // Generate a unique owner ID
+            startDate: ic.time(),
+            endDate: ic.time() + BigInt(fixedEndDate),
+            status: payload.status,
+        };
+
+        // Add the auction to auctionStorage
+        auctionStorage.insert(newAuction.id, newAuction);
+
+        return Result.Ok(newAuction);
     } catch (error) {
         return Result.Err<Auction, string>('Failed to create auction!');
     }
 }
 
+/**
+ * Updates information for a specific auction.
+ * @param auctionId - The ID of the auction to update.
+ * @param ownerId - The ID of the owner making the update.
+ * @param payload - Updated information about the auction.
+ * @returns A Result containing the updated auction or an error message.
+ */
 $update;
 export function updateAuction(auctionId: string, ownerId: string, payload: AuctionPayload): Result<Auction, string> {
+    // Validate IDs
+    if (!isValidUUID(auctionId) || !isValidUUID(ownerId)) {
+        return Result.Err<Auction, string>('Invalid auction or owner ID for updating an auction.');
+    }
+
     return match(auctionStorage.get(auctionId), {
         Some: (auction) => {
+            // Validate ownership
             if (auction.ownerId !== ownerId) {
                 return Result.Err<Auction, string>('Only the owner can update this auction!');
             }
-            const updatedAuction: Auction = { ...auction, ...payload };
+
+            // Set each property for better performance
+            const updatedAuction: Auction = {
+                id: auction.id,
+                assetType: payload.assetType || auction.assetType,
+                assetDescription: payload.assetDescription || auction.assetDescription,
+                ownerName: payload.ownerName || auction.ownerName,
+                ownerId: auction.ownerId,
+                startDate: auction.startDate,
+                endDate: auction.endDate,
+                status: payload.status || auction.status,
+            };
+
+            // Update the auction in auctionStorage
             auctionStorage.insert(auction.id, updatedAuction);
+
             return Result.Ok<Auction, string>(updatedAuction);
         },
         None: () => Result.Err<Auction, string>(`Failed to update auction with id: ${auctionId}!`),
     });
 }
 
+/**
+ * Ends a specific auction.
+ * @param auctionId - The ID of the auction to end.
+ * @param ownerId - The ID of the owner ending the auction.
+ * @returns A Result containing the ended auction or an error message.
+ */
 $update;
-export function endAuction(auctionId: string, ownerId: string): Result<Auction, string> { 
+export function endAuction(auctionId: string, ownerId: string): Result<Auction, string> {
+    // Validate IDs
+    if (!isValidUUID(auctionId) || !isValidUUID(ownerId)) {
+        return Result.Err<Auction, string>('Invalid auction or owner ID for ending an auction.');
+    }
+
     return match(auctionStorage.get(auctionId), {
         Some: (auction) => {
+            // Validate ownership
             if (auction.ownerId !== ownerId) {
                 return Result.Err<Auction, string>('Only the owner can end this auction!');
             }
 
+            // Validate if the auction has already ended
             if (auction.endDate >= ic.time()) {
-                return Result.Err<Auction, string>('Auction already ended!')
+                return Result.Err<Auction, string>('Auction already ended!');
             }
 
-            const endedAuction: Auction = { ...auction, endDate: ic.time(), status: 'inactive' };
+            // Set each property for better performance
+            const endedAuction: Auction = {
+                id: auction.id,
+                assetType: auction.assetType,
+                assetDescription: auction.assetDescription,
+                ownerName: auction.ownerName,
+                ownerId: auction.ownerId,
+                startDate: auction.startDate,
+                endDate: ic.time(),
+                status: 'inactive',
+            };
+
+            // Update the auction in auctionStorage
             auctionStorage.insert(auction.id, endedAuction);
+
             return Result.Ok<Auction, string>(endedAuction);
         },
         None: () => Result.Err<Auction, string>(`Failed to end auction with id: ${auctionId}!`),
     });
 }
 
+/**
+ * Deletes a specific auction.
+ * @param auctionId - The ID of the auction to delete.
+ * @param ownerId - The ID of the owner deleting the auction.
+ * @returns A Result containing the deleted auction or an error message.
+ */
 $update;
-export function deleteAuction(auctionId: string, ownerId: string): Result<Auction, string> { 
+export function deleteAuction(auctionId: string, ownerId: string): Result<Auction, string> {
+    // Validate IDs
+    if (!isValidUUID(auctionId) || !isValidUUID(ownerId)) {
+        return Result.Err<Auction, string>('Invalid auction or owner ID for deleting an auction.');
+    }
+
     return match(auctionStorage.remove(auctionId), {
         Some: (auction) => {
+            // Validate ownership
             if (auction.ownerId !== ownerId) {
                 return Result.Err<Auction, string>('Only owner can delete auction!');
             }
+
             return Result.Ok<Auction, string>(auction);
         },
         None: () => Result.Err<Auction, string>(`Failed to delete auction with id: ${auctionId}`),
     });
 }
 
+/**
+ * Checks if an auction status is valid.
+ * @param status - The auction status to validate.
+ * @returns True if the status is valid, otherwise false.
+ */
 function isAuctionStatusValid(status: string): boolean {
-    return status === 'active' || status === 'inactive'
+    return status === 'active' || status === 'inactive';
 }
 
+// A workaround to make the uuid package work with Azle
 globalThis.crypto = {
-     // @ts-ignore
+    // @ts-ignore
     getRandomValues: () => {
         let array = new Uint8Array(32);
 
@@ -146,5 +266,15 @@ globalThis.crypto = {
         }
 
         return array;
-    }
+    },
 };
+
+/**
+ * Validates whether a given string is a valid UUID.
+ * @param id - The string to validate as a UUID.
+ * @returns True if the string is a valid UUID, otherwise false.
+ */
+export function isValidUUID(id: string): boolean {
+    // Validate if the provided ID is a valid UUID
+    return /^[\da-f]{8}-([\da-f]{4}-){3}[\da-f]{12}$/i.test(id);
+}
