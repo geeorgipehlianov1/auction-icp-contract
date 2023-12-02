@@ -18,8 +18,8 @@ type AuctionPayload = Record<{
     ownerName: string;
     status: string;
 }>;
-
-const fixedEndDate = 86400000;
+// one day in nanoseconds
+const fixedEndDate = 86400000000000;
 
 const auctionStorage = new StableBTreeMap<string, Auction>(1, 44, 1024);
 
@@ -105,7 +105,7 @@ $update;
 export function createAuction(payload: AuctionPayload): Result<Auction, string> {
     try {
         // Validate payload
-        if (!payload.assetType || !payload.assetDescription || !payload.ownerName || !payload.status) {
+        if (isInvalidString(payload.assetType) || isInvalidString(payload.assetDescription) || isInvalidString(payload.ownerName) || !isAuctionStatusValid(payload.status)) {
             return Result.Err<Auction, string>('Incomplete input data!');
         }
 
@@ -117,7 +117,7 @@ export function createAuction(payload: AuctionPayload): Result<Auction, string> 
             assetType: payload.assetType,
             assetDescription: payload.assetDescription,
             ownerName: payload.ownerName,
-            ownerId: uuidv4(), // Generate a unique owner ID
+            ownerId: ic.caller().toString(), // Generate a unique owner ID
             startDate: ic.time(),
             endDate: ic.time() + BigInt(fixedEndDate),
             status: payload.status,
@@ -140,17 +140,25 @@ export function createAuction(payload: AuctionPayload): Result<Auction, string> 
  * @returns A Result containing the updated auction or an error message.
  */
 $update;
-export function updateAuction(auctionId: string, ownerId: string, payload: AuctionPayload): Result<Auction, string> {
+export function updateAuction(auctionId: string, payload: AuctionPayload): Result<Auction, string> {
     // Validate IDs
-    if (!isValidUUID(auctionId) || !isValidUUID(ownerId)) {
-        return Result.Err<Auction, string>('Invalid auction or owner ID for updating an auction.');
+    if (!isValidUUID(auctionId) ) {
+        return Result.Err<Auction, string>('Invalid auction ID for updating an auction.');
+    }
+
+    // Validate payload
+    if (isInvalidString(payload.assetType) || isInvalidString(payload.assetDescription) || isInvalidString(payload.ownerName)) {
+        return Result.Err<Auction, string>('Incomplete input data!');
     }
 
     return match(auctionStorage.get(auctionId), {
         Some: (auction) => {
             // Validate ownership
-            if (auction.ownerId !== ownerId) {
+            if (auction.ownerId !== ic.caller().toString()) {
                 return Result.Err<Auction, string>('Only the owner can update this auction!');
+            }
+            if (ic.time() >= auction.endDate){
+                return Result.Err<Auction, string>("Cannot modify the details of auction that has ended.");
             }
 
             // Set each property for better performance
@@ -162,7 +170,7 @@ export function updateAuction(auctionId: string, ownerId: string, payload: Aucti
                 ownerId: auction.ownerId,
                 startDate: auction.startDate,
                 endDate: auction.endDate,
-                status: payload.status || auction.status,
+                status: auction.status,
             };
 
             // Update the auction in auctionStorage
@@ -181,22 +189,26 @@ export function updateAuction(auctionId: string, ownerId: string, payload: Aucti
  * @returns A Result containing the ended auction or an error message.
  */
 $update;
-export function endAuction(auctionId: string, ownerId: string): Result<Auction, string> {
+export function endAuction(auctionId: string): Result<Auction, string> {
     // Validate IDs
-    if (!isValidUUID(auctionId) || !isValidUUID(ownerId)) {
-        return Result.Err<Auction, string>('Invalid auction or owner ID for ending an auction.');
+    if (!isValidUUID(auctionId)) {
+        return Result.Err<Auction, string>('Invalid auction ID for ending an auction.');
     }
 
     return match(auctionStorage.get(auctionId), {
         Some: (auction) => {
             // Validate ownership
-            if (auction.ownerId !== ownerId) {
+            if (auction.ownerId !== ic.caller().toString()) {
                 return Result.Err<Auction, string>('Only the owner can end this auction!');
             }
 
             // Validate if the auction has already ended
-            if (auction.endDate >= ic.time()) {
-                return Result.Err<Auction, string>('Auction already ended!');
+            if (auction.status === "inactive") {
+                return Result.Err<Auction, string>('Auction has already ended!');
+            }
+
+            if (auction.endDate >= ic.time()){
+                return Result.Err<Auction, string>("There is still time left before auction can be ended.");
             }
 
             // Set each property for better performance
@@ -227,18 +239,20 @@ export function endAuction(auctionId: string, ownerId: string): Result<Auction, 
  * @returns A Result containing the deleted auction or an error message.
  */
 $update;
-export function deleteAuction(auctionId: string, ownerId: string): Result<Auction, string> {
+export function deleteAuction(auctionId: string): Result<Auction, string> {
     // Validate IDs
-    if (!isValidUUID(auctionId) || !isValidUUID(ownerId)) {
+    if (!isValidUUID(auctionId)) {
         return Result.Err<Auction, string>('Invalid auction or owner ID for deleting an auction.');
     }
 
-    return match(auctionStorage.remove(auctionId), {
+    return match(auctionStorage.get(auctionId), {
         Some: (auction) => {
             // Validate ownership
-            if (auction.ownerId !== ownerId) {
-                return Result.Err<Auction, string>('Only owner can delete auction!');
+            if (auction.ownerId !== ic.caller().toString()) {
+                return Result.Err<Auction, string>('Only the owner can delete this auction!');
             }
+
+            auctionStorage.remove(auctionId);
 
             return Result.Ok<Auction, string>(auction);
         },
@@ -255,6 +269,24 @@ function isAuctionStatusValid(status: string): boolean {
     return status === 'active' || status === 'inactive';
 }
 
+
+/**
+ * Validates whether a given string is a valid UUID.
+ * @param id - The string to validate as a UUID.
+ * @returns True if the string is a valid UUID, otherwise false.
+ */
+function isValidUUID(id: string): boolean {
+    // Validate if the provided ID is a valid UUID
+    return /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/gi.test(id);
+}
+
+
+// Helper function that trims the input string and then checks the length
+// The string is empty if true is returned, otherwise, string is a valid value
+function isInvalidString(str: string): boolean {
+    return str.trim().length == 0
+  }
+
 // A workaround to make the uuid package work with Azle
 globalThis.crypto = {
     // @ts-ignore
@@ -268,13 +300,3 @@ globalThis.crypto = {
         return array;
     },
 };
-
-/**
- * Validates whether a given string is a valid UUID.
- * @param id - The string to validate as a UUID.
- * @returns True if the string is a valid UUID, otherwise false.
- */
-export function isValidUUID(id: string): boolean {
-    // Validate if the provided ID is a valid UUID
-    return /^[\da-f]{8}-([\da-f]{4}-){3}[\da-f]{12}$/i.test(id);
-}
